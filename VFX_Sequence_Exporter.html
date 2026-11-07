@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>特效图集 & 高清序列帧导出工具 (专业工作流版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 JSZip 用于打包序列帧下载 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        .checkerboard {
+            background-image: 
+                linear-gradient(45deg, #e5e7eb 25%, transparent 25%), 
+                linear-gradient(-45deg, #e5e7eb 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #e5e7eb 75%), 
+                linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%;
+            background: #4f46e5; cursor: pointer; margin-top: -6px; box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #cbd5e1; border-radius: 2px;
+        }
+        .step-badge {
+            display: inline-block; background: #4f46e5; color: white; width: 24px; height: 24px; 
+            text-align: center; border-radius: 50%; font-weight: bold; margin-right: 8px; line-height: 24px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-4 md:p-8 font-sans text-gray-800">
+    <div class="max-w-5xl mx-auto bg-white p-6 md:p-10 rounded-2xl shadow-xl border border-gray-200">
+        <h1 class="text-3xl font-extrabold mb-8 text-gray-900 border-b pb-4">特效处理 & 序列帧导出工具</h1>
+        
+        <!-- 第一步：基础导入与底层处理 -->
+        <div class="mb-8 p-6 bg-blue-50 rounded-xl border border-blue-100">
+            <h2 class="text-lg font-bold text-blue-900 mb-4 flex items-center"><span class="step-badge">1</span> 基础导入与底层抠图</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">导入素材 (图片序列 / 视频 MP4)</label>
+                    <input type="file" id="input-files" multiple accept="image/png, image/jpeg, video/mp4, video/webm, video/quicktime" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-100 file:text-blue-700 hover:file:bg-blue-200 border border-blue-200 rounded-md p-2 bg-white">
+                    <p id="file-info" class="text-xs text-blue-600 mt-2 font-semibold">尚未选择文件</p>
+                </div>
+                <div class="flex flex-col gap-3 justify-center">
+                    <div class="flex items-center gap-2 bg-white px-3 py-2 rounded-md border border-gray-300 shadow-sm">
+                        <span class="text-sm font-bold text-gray-800">🔄 底层旋转:</span>
+                        <input type="number" id="input-rotation" value="0" class="w-16 text-sm border-gray-300 rounded p-1 focus:ring-blue-500 border">
+                        <span class="text-sm text-gray-600">度 (自适应扩展不裁切)</span>
+                    </div>
+                    <div class="flex items-center bg-white px-3 py-2 border border-gray-300 rounded-md shadow-sm">
+                        <input type="checkbox" id="input-remove-black" checked class="h-5 w-5 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                        <label for="input-remove-black" class="ml-2 block text-sm font-bold text-gray-800 cursor-pointer">
+                            自动抠除底层黑底 (生成透明通道)
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 第二步 & 第三步：核心预览区 -->
+        <div id="workspace-section" class="hidden">
+            <!-- 蒙版与裁切控制 -->
+            <div class="mb-6 p-6 bg-indigo-50 rounded-xl border border-indigo-100">
+                <h2 class="text-lg font-bold text-indigo-900 mb-4 flex items-center"><span class="step-badge bg-indigo-600">2</span> 裁切与高级蒙版叠加</h2>
+                
+                <div class="flex flex-wrap items-center gap-4 mb-4">
+                    <div class="flex items-center gap-3 bg-white px-3 py-2 rounded border border-gray-300 shadow-sm">
+                        <span class="text-sm font-bold text-gray-800">裁切形状:</span>
+                        <label class="flex items-center text-sm cursor-pointer"><input type="radio" name="crop-ratio" value="square" checked class="mr-1 text-indigo-600"> 1:1 正方形</label>
+                        <label class="flex items-center text-sm cursor-pointer"><input type="radio" name="crop-ratio" value="free" class="mr-1 text-indigo-600"> 自由矩形</label>
+                    </div>
+                    
+                    <div class="flex items-center gap-2 bg-white px-3 py-2 rounded border border-gray-300 shadow-sm">
+                        <label class="text-sm font-bold text-gray-800">蒙版:</label>
+                        <select id="mask-type" class="border-gray-300 rounded text-sm p-1 focus:ring-indigo-500 border">
+                            <option value="none">无蒙版</option>
+                            <option value="circle" selected>圆形羽化 (消除四周)</option>
+                            <option value="square">矩形羽化 (保留角落)</option>
+                            <option value="custom">🖼️ 上传自定义蒙版...</option>
+                            <option value="brush">🖌️ 手动涂抹 (画笔)</option>
+                        </select>
+                        <input type="file" id="input-custom-mask" accept="image/png, image/jpeg" class="hidden">
+                    </div>
+                    
+                    <div class="flex items-center gap-2 bg-white px-3 py-2 rounded border border-gray-300 shadow-sm">
+                        <label class="text-sm font-bold text-gray-800">羽化程度:</label>
+                        <input type="range" id="mask-feather" min="0" max="100" value="25" class="w-24">
+                    </div>
+                </div>
+
+                <!-- 手动涂抹面板 -->
+                <div id="brush-controls" class="hidden bg-white p-3 rounded border border-indigo-200 flex flex-wrap items-center gap-4 mb-4 shadow-sm">
+                    <span class="text-xs text-pink-600 font-bold">画笔模式：在下方裁切框内拖拽即可涂抹</span>
+                    <div class="flex items-center gap-3 border-l pl-4 border-gray-300">
+                        <label class="text-sm cursor-pointer flex items-center"><input type="radio" name="brush-mode" value="erase" checked class="mr-1"> 橡皮擦 (擦除特效)</label>
+                        <label class="text-sm cursor-pointer flex items-center"><input type="radio" name="brush-mode" value="draw" class="mr-1"> 画笔 (恢复特效)</label>
+                    </div>
+                    <input type="range" id="brush-size" min="5" max="150" value="40" class="w-24 ml-2" title="笔刷大小">
+                    <button id="btn-fill-mask" class="ml-auto text-xs bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded border border-gray-300">重置全显</button>
+                    <button id="btn-clear-mask" class="text-xs bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1 rounded border border-red-200">清空蒙版</button>
+                </div>
+                
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-xs text-gray-600">框外拖拽重新绘制；框内拖动改变位置；拖动手柄缩放。</span>
+                    <label class="flex items-center text-xs font-bold text-red-600 cursor-pointer">
+                        <input type="checkbox" id="input-show-mask-overlay" checked class="h-4 w-4 mr-1 rounded border-gray-300 text-red-600">
+                        显示红色蒙版叠加层 (红色为将被剔除区域)
+                    </label>
+                </div>
+
+                <!-- 核心画面容器 -->
+                <div class="relative w-full max-w-2xl mx-auto bg-white border border-gray-300 rounded overflow-hidden shadow-inner checkerboard">
+                    <canvas id="crop-canvas" class="w-full h-auto block cursor-crosshair"></canvas>
+                </div>
+            </div>
+
+            <!-- 时间轴与动态预览 -->
+            <div id="video-preview-controls" class="hidden mb-8 p-6 bg-purple-50 rounded-xl border border-purple-100">
+                <h2 class="text-lg font-bold text-purple-900 mb-4 flex items-center"><span class="step-badge bg-purple-600">3</span> 动态预览与时间裁剪</h2>
+                <div class="flex flex-col items-center">
+                    <div class="flex items-center gap-4 w-full mb-3">
+                        <button id="btn-play-pause" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-6 rounded shadow transition">
+                            ▶ 播放叠加预览
+                        </button>
+                        <span id="video-time-display" class="text-sm font-mono text-purple-800 font-bold bg-white px-3 py-1 rounded border border-purple-200">0.00s / 0.00s</span>
+                    </div>
+                    <div class="flex items-center w-full mb-5 gap-3">
+                        <span class="text-xs text-gray-500 font-bold">时间轴</span>
+                        <input type="range" id="video-timeline" min="0" max="100" value="0" step="0.01" class="flex-grow appearance-none focus:outline-none">
+                    </div>
+                    <div class="flex items-center gap-4 w-full bg-white p-3 rounded border border-purple-200">
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs font-bold text-gray-700">开始时间 (秒):</label>
+                            <input type="number" id="input-time-start" value="0" step="0.1" min="0" class="w-20 text-sm border-gray-300 rounded p-1 focus:ring-purple-500">
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <label class="text-xs font-bold text-gray-700">结束时间 (秒):</label>
+                            <input type="number" id="input-time-end" value="0" step="0.1" min="0" class="w-20 text-sm border-gray-300 rounded p-1 focus:ring-purple-500">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第四步：打包输出 -->
+            <div class="p-6 bg-green-50 rounded-xl border border-green-100">
+                <h2 class="text-lg font-bold text-green-900 mb-4 flex items-center"><span class="step-badge bg-green-600">4</span> 导出与打包</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                    <!-- 左侧：ZIP 高清导出 -->
+                    <div class="bg-white p-5 rounded-xl border border-blue-200 shadow-sm flex flex-col justify-between">
+                        <div>
+                            <h3 class="font-bold text-blue-800 mb-3 border-b pb-2">📦 选项 A：下载高清序列帧 (ZIP)</h3>
+                            <p class="text-xs text-gray-500 mb-4">
+                                将以<b>裁切框的高清原始分辨率</b>导出，不受图集限制。可导出完整的几十/几百帧动画。
+                            </p>
+                            <div class="grid grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label class="block text-sm font-bold text-gray-700 mb-1">视频提取帧率 (FPS)</label>
+                                    <input type="number" id="input-zip-fps" value="30" min="1" max="120" class="w-full border-gray-300 border rounded-md p-2 focus:ring-blue-500">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-bold text-gray-700 mb-1">序列帧文件前缀</label>
+                                    <input type="text" id="input-zip-prefix" value="frame" placeholder="例如: effect_" class="w-full border-gray-300 border rounded-md p-2 focus:ring-blue-500">
+                                </div>
+                            </div>
+                        </div>
+                        <button id="btn-export-zip" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-md flex items-center justify-center gap-2">
+                            提取并下载 ZIP 压缩包
+                        </button>
+                    </div>
+
+                    <!-- 右侧：图集导出 -->
+                    <div class="bg-white p-5 rounded-xl border border-green-200 shadow-sm flex flex-col justify-between">
+                        <div>
+                            <h3 class="font-bold text-green-800 mb-3 border-b pb-2">🖼️ 选项 B：生成 Flipbook 图集</h3>
+                            <p class="text-xs text-gray-500 mb-4">
+                                根据行列数将帧缩小并拼贴成一张大图。适合直接导入 Unity 等引擎材质系统。
+                            </p>
+                            <div class="grid grid-cols-3 gap-2 mb-4">
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-700">列数</label>
+                                    <input type="number" id="input-cols" min="1" value="8" class="w-full border-gray-300 rounded p-1">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-700">行数</label>
+                                    <input type="number" id="input-rows" min="1" value="8" class="w-full border-gray-300 rounded p-1">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-gray-700">图集总宽</label>
+                                    <input type="number" id="input-atlas-width" value="2048" step="256" class="w-full border-gray-300 rounded p-1">
+                                </div>
+                            </div>
+                        </div>
+                        <button id="btn-export-atlas" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition shadow-md flex items-center justify-center gap-2">
+                            生成 Flipbook 图集
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex items-center mb-6 bg-white px-3 py-2 rounded border border-gray-300 max-w-fit shadow-sm">
+                    <input type="checkbox" id="input-preview-bg" class="h-4 w-4 text-gray-600 rounded">
+                    <label for="input-preview-bg" class="ml-2 block text-sm font-bold text-gray-700">导出自带黑色背景 (默认所有导出皆为透明底)</label>
+                </div>
+                
+                <p id="export-status" class="text-center mt-4 text-sm font-bold text-blue-700 hidden bg-blue-100 p-3 rounded-md border border-blue-200"></p>
+
+                <!-- 图集生成结果展示区 -->
+                <div id="result-section" class="mt-8 hidden border-t border-green-200 pt-6">
+                    <div class="flex gap-4 mb-4">
+                        <button id="btn-download-img" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 px-4 rounded shadow">⬇️ 下载图集 PNG</button>
+                        <button id="btn-download-meta" class="bg-teal-600 hover:bg-teal-700 text-white font-medium py-2 px-4 rounded shadow">⬇️ 下载元数据 JSON</button>
+                    </div>
+                    <div class="border rounded-md overflow-hidden bg-white p-2 shadow-inner checkerboard">
+                        <canvas id="atlas-canvas" class="max-w-full h-auto mx-auto shadow-md"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // DOM 元素获取
+        const inputFiles = document.getElementById('input-files');
+        const fileInfo = document.getElementById('file-info');
+        const inputRotation = document.getElementById('input-rotation');
+        const inputRemoveBlack = document.getElementById('input-remove-black');
+        
+        const workspaceSection = document.getElementById('workspace-section');
+        const cropCanvas = document.getElementById('crop-canvas');
+        const ratioRadios = document.querySelectorAll('input[name="crop-ratio"]');
+        const maskType = document.getElementById('mask-type');
+        const inputCustomMask = document.getElementById('input-custom-mask');
+        const maskFeather = document.getElementById('mask-feather');
+        const brushControls = document.getElementById('brush-controls');
+        const brushHint = document.getElementById('brush-hint');
+        const brushSize = document.getElementById('brush-size');
+        const inputShowMaskOverlay = document.getElementById('input-show-mask-overlay');
+        
+        const videoPreviewControls = document.getElementById('video-preview-controls');
+        const btnPlayPause = document.getElementById('btn-play-pause');
+        const videoTimeDisplay = document.getElementById('video-time-display');
+        const videoTimeline = document.getElementById('video-timeline');
+        const inputTimeStart = document.getElementById('input-time-start');
+        const inputTimeEnd = document.getElementById('input-time-end');
+        
+        const inputCols = document.getElementById('input-cols');
+        const inputRows = document.getElementById('input-rows');
+        const inputAtlasWidth = document.getElementById('input-atlas-width');
+        const inputPreviewBg = document.getElementById('input-preview-bg');
+        const inputZipFps = document.getElementById('input-zip-fps');
+        const inputZipPrefix = document.getElementById('input-zip-prefix');
+        
+        const btnExportAtlas = document.getElementById('btn-export-atlas');
+        const btnExportZip = document.getElementById('btn-export-zip');
+        const exportStatus = document.getElementById('export-status');
+        
+        const resultSection = document.getElementById('result-section');
+        const atlasCanvas = document.getElementById('atlas-canvas');
+        const ctx = atlasCanvas.getContext('2d');
+
+        // 离屏 Canvas (核心渲染管线)
+        const rotatedSourceCanvas = document.createElement('canvas'); // 存放旋转+抠图后的全尺寸底图
+        const rotatedSourceCtx = rotatedSourceCanvas.getContext('2d', { willReadFrequently: true });
+        
+        const maskCanvas = document.createElement('canvas'); // 存放裁切尺寸的蒙版
+        const maskCtx = maskCanvas.getContext('2d');
+        
+        const redOverlayCanvas = document.createElement('canvas'); // 红色预览层
+        const redOverlayCtx = redOverlayCanvas.getContext('2d');
+        
+        let customMaskImage = null; 
+        let generatedMeta = null;
+
+        // --- 核心管线：获取原视频(旋转 + 全局去黑底) ---
+        function getProcessedSource(source) {
+            if (!source) return null;
+            const angleDeg = parseFloat(inputRotation.value) || 0;
+            const removeBlack = inputRemoveBlack.checked;
+
+            const angleRad = angleDeg * Math.PI / 180;
+            const w = source.videoWidth || source.width;
+            const h = source.videoHeight || source.height;
+            
+            // 计算外接矩形避免旋转被截断
+            const cos = Math.abs(Math.cos(angleRad));
+            const sin = Math.abs(Math.sin(angleRad));
+            const newW = w * cos + h * sin;
+            const newH = w * sin + h * cos;
+            
+            rotatedSourceCanvas.width = newW;
+            rotatedSourceCanvas.height = newH;
+            
+            rotatedSourceCtx.translate(newW / 2, newH / 2);
+            rotatedSourceCtx.rotate(angleRad);
+            rotatedSourceCtx.drawImage(source, -w / 2, -h / 2, w, h);
+            
+            if (removeBlack) {
+                let imgData = rotatedSourceCtx.getImageData(0, 0, newW, newH);
+                let data = imgData.data;
+                for (let j = 0; j < data.length; j += 4) {
+                    let r = data[j], g = data[j+1], b = data[j+2];
+                    // 去黑底：亮度决定透明度
+                    data[j+3] = Math.max(r, g, b) * (data[j+3] / 255);
+                }
+                rotatedSourceCtx.putImageData(imgData, 0, 0);
+            }
+            return rotatedSourceCanvas;
+        }
+
+        inputRotation.addEventListener('input', () => { if (!isVideoPlaying) renderCropCanvas(); });
+        inputRemoveBlack.addEventListener('change', () => { if (!isVideoPlaying) renderCropCanvas(); });
+
+        // --- 蒙版生成逻辑 ---
+        function generateProceduralMask() {
+            if (!cropState.w || !cropState.h) return;
+            maskCanvas.width = cropState.w; maskCanvas.height = cropState.h;
+            const type = maskType.value;
+            const feather = parseInt(maskFeather.value);
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            
+            if (type === 'none') {
+                maskCtx.fillStyle = 'white'; maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+            } else if (type === 'circle') {
+                maskCtx.filter = `blur(${feather}px)`; maskCtx.fillStyle = 'white'; maskCtx.beginPath();
+                const rx = Math.max(1, maskCanvas.width / 2 - feather - 2);
+                const ry = Math.max(1, maskCanvas.height / 2 - feather - 2);
+                maskCtx.ellipse(maskCanvas.width/2, maskCanvas.height/2, rx, ry, 0, 0, Math.PI * 2);
+                maskCtx.fill(); maskCtx.filter = 'none';
+            } else if (type === 'square') {
+                maskCtx.filter = `blur(${feather}px)`; maskCtx.fillStyle = 'white';
+                maskCtx.fillRect(feather + 2, feather + 2, maskCanvas.width - (feather+2)*2, maskCanvas.height - (feather+2)*2);
+                maskCtx.filter = 'none';
+            } else if (type === 'custom' && customMaskImage) {
+                maskCtx.filter = feather > 0 ? `blur(${feather}px)` : 'none';
+                maskCtx.drawImage(customMaskImage, 0, 0, maskCanvas.width, maskCanvas.height);
+                maskCtx.filter = 'none';
+            }
+        }
+
+        maskType.addEventListener('change', () => {
+            brushControls.classList.toggle('hidden', maskType.value !== 'brush');
+            brushHint.classList.toggle('hidden', maskType.value !== 'brush');
+            if (maskType.value === 'custom') inputCustomMask.click();
+            else { generateProceduralMask(); if (!isVideoPlaying) renderCropCanvas(); }
+        });
+        
+        inputCustomMask.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) { maskType.value = 'circle'; generateProceduralMask(); if (!isVideoPlaying) renderCropCanvas(); return; }
+            const img = new Image();
+            img.onload = () => {
+                const tempC = document.createElement('canvas');
+                tempC.width = img.width; tempC.height = img.height;
+                const tempCtx = tempC.getContext('2d');
+                tempCtx.drawImage(img, 0, 0);
+                
+                let imgData = tempCtx.getImageData(0, 0, img.width, img.height);
+                let data = imgData.data; let hasAlpha = false;
+                for (let i = 3; i < data.length; i+=4) if (data[i] < 255) { hasAlpha = true; break; }
+                if (!hasAlpha) {
+                    for (let i = 0; i < data.length; i+=4) {
+                        let luminance = (data[i] + data[i+1] + data[i+2]) / 3;
+                        data[i] = 255; data[i+1] = 255; data[i+2] = 255; data[i+3] = luminance; 
+                    }
+                    tempCtx.putImageData(imgData, 0, 0);
+                }
+                customMaskImage = tempC; generateProceduralMask(); if (!isVideoPlaying) renderCropCanvas();
+            };
+            img.src = URL.createObjectURL(file);
+        });
+
+        maskFeather.addEventListener('input', () => {
+            if (maskType.value !== 'brush') { generateProceduralMask(); if (!isVideoPlaying) renderCropCanvas(); }
+        });
+        inputShowMaskOverlay.addEventListener('change', () => { if (!isVideoPlaying) renderCropCanvas(); });
+        
+        document.getElementById('btn-fill-mask').addEventListener('click', () => {
+            maskCtx.fillStyle = 'white'; maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+        document.getElementById('btn-clear-mask').addEventListener('click', () => {
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+
+        function drawMaskStroke(x, y, lastPos) {
+            const mode = document.querySelector('input[name="brush-mode"]:checked').value;
+            const size = parseInt(brushSize.value); const feather = parseInt(maskFeather.value);
+            maskCtx.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+            maskCtx.filter = feather > 0 ? `blur(${feather}px)` : 'none';
+            maskCtx.fillStyle = 'white'; maskCtx.strokeStyle = 'white';
+            maskCtx.lineWidth = size; maskCtx.lineCap = 'round'; maskCtx.lineJoin = 'round';
+            if (lastPos) { maskCtx.beginPath(); maskCtx.moveTo(lastPos.x, lastPos.y); maskCtx.lineTo(x, y); maskCtx.stroke(); }
+            maskCtx.beginPath(); maskCtx.arc(x, y, size/2, 0, Math.PI * 2); maskCtx.fill();
+            maskCtx.filter = 'none'; maskCtx.globalCompositeOperation = 'source-over';
+        }
+
+        // --- 状态与预览渲染 ---
+        let cropState = { x: 0, y: 0, w: 100, h: 100, srcW: 100, srcH: 100 };
+        let previewSource = null, previewVideoElement = null;
+        let isVideoPlaying = false, isVideoInit = false, isScrubbing = false, renderLoopId = null;
+
+        function getRatioMode() { return document.querySelector('input[name="crop-ratio"]:checked').value; }
+        ratioRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'square') {
+                    cropState.w = cropState.h = Math.min(cropState.w, cropState.h);
+                    generateProceduralMask(); if (!isVideoPlaying) renderCropCanvas();
+                }
+            });
+        });
+
+        function initCrop(srcW, srcH, source) {
+            previewSource = source;
+            const activeSource = getProcessedSource(source); 
+            cropState.srcW = activeSource.width; cropState.srcH = activeSource.height;
+            cropState.w = cropState.h = Math.min(cropState.srcW, cropState.srcH);
+            cropState.x = (cropState.srcW - cropState.w) / 2; cropState.y = (cropState.srcH - cropState.h) / 2;
+            generateProceduralMask(); 
+            cropCanvas.width = cropState.srcW; cropCanvas.height = cropState.srcH;
+            renderCropCanvas();
+            workspaceSection.classList.remove('hidden');
+        }
+
+        function drawHandle(ctx, x, y) {
+            ctx.fillStyle = 'white'; ctx.strokeStyle = '#2563eb'; ctx.lineWidth = 1.5;
+            ctx.fillRect(x - 4, y - 4, 8, 8); ctx.strokeRect(x - 4, y - 4, 8, 8);
+        }
+
+        function renderCropCanvas() {
+            if (!previewSource) return;
+            const activeSource = getProcessedSource(previewSource); // 包含最新旋转和黑底
+            const aW = activeSource.width, aH = activeSource.height;
+            
+            if (cropState.srcW !== aW || cropState.srcH !== aH) {
+                cropState.srcW = aW; cropState.srcH = aH; cropCanvas.width = aW; cropCanvas.height = aH;
+                if (cropState.w > aW) cropState.w = aW; if (cropState.h > aH) cropState.h = aH;
+                if (cropState.x + cropState.w > aW) cropState.x = Math.max(0, aW - cropState.w);
+                if (cropState.y + cropState.h > aH) cropState.y = Math.max(0, aH - cropState.h);
+                if (getRatioMode() === 'square') cropState.w = cropState.h = Math.min(cropState.w, cropState.h);
+                updateMaskCanvasSize();
+            }
+
+            const cropCtx = cropCanvas.getContext('2d');
+            cropCtx.clearRect(0, 0, aW, aH); 
+
+            // 1. 绘制带有透明底的完整底图
+            cropCtx.drawImage(activeSource, 0, 0, aW, aH);
+            
+            // 2. 绘制半透明黑色遮罩，压暗全局背景
+            cropCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            cropCtx.fillRect(0, 0, aW, aH);
+            
+            // 3. 提取裁切框内的原图并叠加蒙版
+            const tempC = document.createElement('canvas');
+            tempC.width = cropState.w; tempC.height = cropState.h;
+            const tCtx = tempC.getContext('2d');
+            tCtx.drawImage(activeSource, cropState.x, cropState.y, cropState.w, cropState.h, 0, 0, cropState.w, cropState.h);
+            
+            if (inputShowMaskOverlay.checked) {
+                cropCtx.drawImage(tempC, cropState.x, cropState.y);
+                redOverlayCanvas.width = cropState.w; redOverlayCanvas.height = cropState.h;
+                redOverlayCtx.fillStyle = 'rgba(239, 68, 68, 0.45)';
+                redOverlayCtx.fillRect(0, 0, cropState.w, cropState.h);
+                redOverlayCtx.globalCompositeOperation = 'destination-out';
+                redOverlayCtx.drawImage(maskCanvas, 0, 0); 
+                redOverlayCtx.globalCompositeOperation = 'source-over';
+                cropCtx.drawImage(redOverlayCanvas, cropState.x, cropState.y);
+            } else {
+                tCtx.globalCompositeOperation = 'destination-in';
+                tCtx.drawImage(maskCanvas, 0, 0);
+                cropCtx.drawImage(tempC, cropState.x, cropState.y);
+            }
+
+            // 4. 绘制控制框UI
+            cropCtx.strokeStyle = maskType.value === 'brush' ? '#ec4899' : '#3b82f6'; 
+            cropCtx.lineWidth = Math.max(1.5, aW / 300);
+            cropCtx.strokeRect(cropState.x, cropState.y, cropState.w, cropState.h);
+            
+            cropCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            cropCtx.lineWidth = Math.max(1, aW / 500); cropCtx.beginPath();
+            let thirdW = cropState.w / 3, thirdH = cropState.h / 3;
+            cropCtx.moveTo(cropState.x + thirdW, cropState.y); cropCtx.lineTo(cropState.x + thirdW, cropState.y + cropState.h);
+            cropCtx.moveTo(cropState.x + thirdW * 2, cropState.y); cropCtx.lineTo(cropState.x + thirdW * 2, cropState.y + cropState.h);
+            cropCtx.moveTo(cropState.x, cropState.y + thirdH); cropCtx.lineTo(cropState.x + cropState.w, cropState.y + thirdH);
+            cropCtx.moveTo(cropState.x, cropState.y + thirdH * 2); cropCtx.lineTo(cropState.x + cropState.w, cropState.y + thirdH * 2);
+            cropCtx.stroke();
+
+            drawHandle(cropCtx, cropState.x, cropState.y); drawHandle(cropCtx, cropState.x + cropState.w, cropState.y);
+            drawHandle(cropCtx, cropState.x, cropState.y + cropState.h); drawHandle(cropCtx, cropState.x + cropState.w, cropState.y + cropState.h);
+            if (getRatioMode() === 'free') {
+                drawHandle(cropCtx, cropState.x + cropState.w/2, cropState.y); drawHandle(cropCtx, cropState.x + cropState.w/2, cropState.y + cropState.h);
+                drawHandle(cropCtx, cropState.x, cropState.y + cropState.h/2); drawHandle(cropCtx, cropState.x + cropState.w, cropState.y + cropState.h/2);
+            }
+        }
+
+        function renderLoop() {
+            if (isVideoPlaying && previewSource) { renderCropCanvas(); renderLoopId = requestAnimationFrame(renderLoop); }
+        }
+        function stopVideoPreview() {
+            if (previewVideoElement) previewVideoElement.pause();
+            isVideoPlaying = false;
+            btnPlayPause.textContent = "▶ 播放叠加预览"; btnPlayPause.classList.replace('bg-purple-500', 'bg-purple-600');
+            if (renderLoopId) cancelAnimationFrame(renderLoopId);
+            renderCropCanvas(); 
+        }
+        btnPlayPause.addEventListener('click', () => {
+            if (!previewVideoElement) return;
+            if (previewVideoElement.paused) {
+                const start = parseFloat(inputTimeStart.value) || 0, end = parseFloat(inputTimeEnd.value) || previewVideoElement.duration;
+                if (previewVideoElement.currentTime < start || previewVideoElement.currentTime > end) previewVideoElement.currentTime = start;
+                previewVideoElement.play(); isVideoPlaying = true;
+                btnPlayPause.textContent = "⏸ 暂停预览"; btnPlayPause.classList.replace('bg-purple-600', 'bg-purple-500');
+                renderLoop(); 
+            } else stopVideoPreview();
+        });
+
+        videoTimeline.addEventListener('mousedown', () => { isScrubbing = true; if (isVideoPlaying) stopVideoPreview(); });
+        videoTimeline.addEventListener('input', (e) => { if (previewVideoElement) previewVideoElement.currentTime = parseFloat(e.target.value); });
+        videoTimeline.addEventListener('mouseup', () => { isScrubbing = false; });
+        
+        inputFiles.addEventListener('change', (e) => {
+            stopVideoPreview(); cropState = { x: 0, y: 0, w: 100, h: 100, srcW: 100, srcH: 100 }; isVideoInit = false;
+            workspaceSection.classList.add('hidden'); resultSection.classList.add('hidden');
+            const files = Array.from(e.target.files); if (files.length === 0) return;
+            const isVideo = files[0].type.startsWith('video/');
+            
+            if (isVideo) {
+                fileInfo.textContent = `1 个视频: ${files[0].name}`;
+                videoPreviewControls.classList.remove('hidden');
+                previewVideoElement = document.createElement('video');
+                previewVideoElement.src = URL.createObjectURL(files[0]);
+                previewVideoElement.muted = true; previewVideoElement.playsInline = true;
+                previewVideoElement.onloadedmetadata = () => {
+                    inputTimeEnd.value = previewVideoElement.duration.toFixed(2);
+                    videoTimeline.max = previewVideoElement.duration;
+                    previewVideoElement.currentTime = parseFloat(inputTimeStart.value) || 0.01; 
+                };
+                previewVideoElement.onseeked = () => {
+                    if (!isVideoInit) { initCrop(previewVideoElement.videoWidth, previewVideoElement.videoHeight, previewVideoElement); isVideoInit = true; } 
+                    else if (!isVideoPlaying) renderCropCanvas();
+                    videoTimeDisplay.textContent = `${previewVideoElement.currentTime.toFixed(2)}s / ${previewVideoElement.duration.toFixed(2)}s`;
+                    if (!isScrubbing) videoTimeline.value = previewVideoElement.currentTime;
+                };
+                previewVideoElement.ontimeupdate = () => {
+                    if (isVideoPlaying) {
+                        const s = parseFloat(inputTimeStart.value) || 0, e = parseFloat(inputTimeEnd.value) || previewVideoElement.duration;
+                        if (previewVideoElement.currentTime >= e) previewVideoElement.currentTime = s; 
+                        videoTimeDisplay.textContent = `${previewVideoElement.currentTime.toFixed(2)}s / ${previewVideoElement.duration.toFixed(2)}s`;
+                        if (!isScrubbing) videoTimeline.value = previewVideoElement.currentTime;
+                    }
+                };
+                inputTimeStart.addEventListener('change', () => { if (!isVideoPlaying && previewVideoElement) previewVideoElement.currentTime = parseFloat(inputTimeStart.value) || 0; });
+            } else {
+                fileInfo.textContent = `${files.length} 张图片`;
+                videoPreviewControls.classList.add('hidden'); previewVideoElement = null;
+                const tempImg = new Image();
+                tempImg.onload = () => initCrop(tempImg.width, tempImg.height, tempImg);
+                tempImg.src = URL.createObjectURL(files[0]);
+            }
+        });
+
+        // 交互检测与拖拽
+        const HANDLE_HIT = 12;
+        function getHitZone(x, y) {
+            const {x: cx, y: cy, w: cw, h: ch} = cropState; const mode = getRatioMode();
+            if (Math.abs(x - cx) < HANDLE_HIT && Math.abs(y - cy) < HANDLE_HIT) return 'nw-resize';
+            if (Math.abs(x - (cx + cw)) < HANDLE_HIT && Math.abs(y - cy) < HANDLE_HIT) return 'ne-resize';
+            if (Math.abs(x - cx) < HANDLE_HIT && Math.abs(y - (cy + ch)) < HANDLE_HIT) return 'sw-resize';
+            if (Math.abs(x - (cx + cw)) < HANDLE_HIT && Math.abs(y - (cy + ch)) < HANDLE_HIT) return 'se-resize';
+            if (mode === 'free') {
+                if (Math.abs(y - cy) < HANDLE_HIT && x > cx && x < cx + cw) return 'n-resize';
+                if (Math.abs(y - (cy + ch)) < HANDLE_HIT && x > cx && x < cx + cw) return 's-resize';
+                if (Math.abs(x - cx) < HANDLE_HIT && y > cy && y < cy + ch) return 'w-resize';
+                if (Math.abs(x - (cx + cw)) < HANDLE_HIT && y > cy && y < cy + ch) return 'e-resize';
+            }
+            if (x > cx && x < cx + cw && y > cy && y < cy + ch) return 'move';
+            return 'draw_box';
+        }
+
+        let isDragging = false, dragMode = null, dragStartMouse = {x:0, y:0}, dragStartCrop = {}, lastDrawPos = null;
+        cropCanvas.addEventListener('mousedown', (e) => {
+            isDragging = true; const r = cropCanvas.getBoundingClientRect();
+            const mouseX = (e.clientX - r.left) * (cropCanvas.width / r.width), mouseY = (e.clientY - r.top) * (cropCanvas.height / r.height);
+            const hitZone = getHitZone(mouseX, mouseY);
+            if (maskType.value === 'brush' && (hitZone === 'move' || (!hitZone.includes('resize') && hitZone !== 'draw_box'))) {
+                dragMode = 'draw_mask'; lastDrawPos = { x: mouseX - cropState.x, y: mouseY - cropState.y };
+                drawMaskStroke(lastDrawPos.x, lastDrawPos.y, null); if (!isVideoPlaying) renderCropCanvas(); return;
+            }
+            dragMode = hitZone; dragStartMouse = { x: mouseX, y: mouseY }; dragStartCrop = { ...cropState };
+        });
+        cropCanvas.addEventListener('mousemove', (e) => {
+            const r = cropCanvas.getBoundingClientRect();
+            const mouseX = (e.clientX - r.left) * (cropCanvas.width / r.width), mouseY = (e.clientY - r.top) * (cropCanvas.height / r.height);
+            if (!isDragging) {
+                const hz = getHitZone(mouseX, mouseY);
+                cropCanvas.style.cursor = (maskType.value === 'brush' && hz === 'move') || hz === 'draw_box' ? 'crosshair' : hz;
+                return;
+            }
+            if (dragMode === 'draw_mask') {
+                const cX = mouseX - cropState.x, cY = mouseY - cropState.y;
+                drawMaskStroke(cX, cY, lastDrawPos); lastDrawPos = { x: cX, y: cY };
+            } else if (dragMode === 'move') {
+                cropState.x = Math.max(0, Math.min(dragStartCrop.x + (mouseX - dragStartMouse.x), cropState.srcW - cropState.w));
+                cropState.y = Math.max(0, Math.min(dragStartCrop.y + (mouseY - dragStartMouse.y), cropState.srcH - cropState.h));
+            } else if (dragMode.includes('resize')) {
+                let dx = mouseX - dragStartMouse.x, dy = mouseY - dragStartMouse.y;
+                let nw = dragStartCrop.w, nh = dragStartCrop.h, nx = dragStartCrop.x, ny = dragStartCrop.y;
+                if (dragMode.includes('e')) nw += dx; if (dragMode.includes('w')) { nw -= dx; nx += dx; }
+                if (dragMode.includes('s')) nh += dy; if (dragMode.includes('n')) { nh -= dy; ny += dy; }
+                if (getRatioMode() === 'square') { let m = Math.max(nw, nh); nw = nh = m; if (dragMode.includes('n')) ny = dragStartCrop.y + dragStartCrop.h - nh; if (dragMode.includes('w')) nx = dragStartCrop.x + dragStartCrop.w - nw; }
+                if (nw >= 20 && nh >= 20) {
+                    if (nx < 0) { nw += nx; nx = 0; } if (ny < 0) { nh += ny; ny = 0; }
+                    if (nx + nw > cropState.srcW) nw = cropState.srcW - nx; if (ny + nh > cropState.srcH) nh = cropState.srcH - ny;
+                    if (getRatioMode() === 'square') { let fs = Math.min(nw, nh); nw = nh = fs; }
+                    cropState.x = nx; cropState.y = ny; cropState.w = nw; cropState.h = nh;
+                }
+                updateMaskCanvasSize();
+            } else if (dragMode === 'draw_box') {
+                let nw = Math.abs(mouseX - dragStartMouse.x), nh = Math.abs(mouseY - dragStartMouse.y);
+                if (getRatioMode() === 'square') nw = nh = Math.min(nw, nh);
+                let dirX = mouseX - dragStartMouse.x < 0 ? -1 : 1, dirY = mouseY - dragStartMouse.y < 0 ? -1 : 1;
+                if (dirX > 0 && dragStartMouse.x + nw > cropState.srcW) nw = cropState.srcW - dragStartMouse.x;
+                if (dirX < 0 && dragStartMouse.x - nw < 0) nw = dragStartMouse.x;
+                if (dirY > 0 && dragStartMouse.y + nh > cropState.srcH) nh = cropState.srcH - dragStartMouse.y;
+                if (dirY < 0 && dragStartMouse.y - nh < 0) nh = dragStartMouse.y;
+                if (getRatioMode() === 'square') nw = nh = Math.min(nw, nh);
+                cropState.w = Math.max(20, nw); cropState.h = Math.max(20, nh);
+                cropState.x = dirX > 0 ? dragStartMouse.x : dragStartMouse.x - cropState.w;
+                cropState.y = dirY > 0 ? dragStartMouse.y : dragStartMouse.y - cropState.h;
+                updateMaskCanvasSize();
+            }
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+        function updateMaskCanvasSize() {
+            const old = document.createElement('canvas'); old.width = maskCanvas.width; old.height = maskCanvas.height;
+            old.getContext('2d').drawImage(maskCanvas, 0, 0);
+            maskCanvas.width = cropState.w; maskCanvas.height = cropState.h;
+            if (maskType.value === 'brush') maskCtx.drawImage(old, 0, 0, maskCanvas.width, maskCanvas.height);
+            else generateProceduralMask();
+        }
+        window.addEventListener('mouseup', () => { isDragging = false; dragMode = null; });
+        cropCanvas.addEventListener('mouseleave', () => { isDragging = false; dragMode = null; });
+
+        // --- 核心工具：生成最终纯净画面 (高清，不缩放) ---
+        function generateHighResCanvas(source) {
+            const activeSource = getProcessedSource(source); 
+            const hCanvas = document.createElement('canvas');
+            hCanvas.width = cropState.w; hCanvas.height = cropState.h;
+            const hCtx = hCanvas.getContext('2d');
+            
+            if (inputPreviewBg.checked) { hCtx.fillStyle = 'black'; hCtx.fillRect(0, 0, cropState.w, cropState.h); }
+
+            // 绘制裁切区
+            hCtx.drawImage(activeSource, cropState.x, cropState.y, cropState.w, cropState.h, 0, 0, cropState.w, cropState.h);
+            
+            // 叠加蒙版
+            hCtx.globalCompositeOperation = 'destination-in';
+            hCtx.drawImage(maskCanvas, 0, 0);
+            hCtx.globalCompositeOperation = 'source-over';
+            
+            return hCanvas;
+        }
+
+        // --- 核心工具：生成适用于图集的小画面 (缩放居中) ---
+        function generateAtlasCellCanvas(source, cell) {
+            const highRes = generateHighResCanvas(source); // 先拿到高清纯净图
+            const cellCanvas = document.createElement('canvas');
+            cellCanvas.width = cell; cellCanvas.height = cell;
+            const cellCtx = cellCanvas.getContext('2d');
+            
+            // 自适应等比居中算法
+            const scale = Math.min(cell / cropState.w, cell / cropState.h);
+            const drawW = cropState.w * scale, drawH = cropState.h * scale;
+            const drawX = (cell - drawW) / 2, drawY = (cell - drawH) / 2;
+            
+            if (inputPreviewBg.checked) { cellCtx.fillStyle = 'black'; cellCtx.fillRect(0, 0, cell, cell); }
+            cellCtx.drawImage(highRes, 0, 0, cropState.w, cropState.h, drawX, drawY, drawW, drawH);
+            return cellCanvas;
+        }
+
+        function setProcessingState(isProcessing, msg) {
+            exportStatus.classList.toggle('hidden', !isProcessing);
+            if (isProcessing) exportStatus.textContent = msg;
+            btnExportAtlas.disabled = isProcessing; btnExportZip.disabled = isProcessing;
+        }
+
+        // --- 精确寻帧工具，双重 requestAnimationFrame 防止浏览器丢帧 ---
+        const seekVideoExact = (vid, time) => new Promise(resolve => {
+            const onSeeked = () => {
+                vid.removeEventListener('seeked', onSeeked);
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+            };
+            vid.addEventListener('seeked', onSeeked);
+            vid.currentTime = time;
+        });
+
+        // ================= 导出 1：ZIP 高清序列包 =================
+        btnExportZip.addEventListener('click', async () => {
+            const files = Array.from(inputFiles.files); if (files.length === 0) return alert("请选择素材");
+            stopVideoPreview(); setProcessingState(true, "⏳ 正在提取高清序列并打包 ZIP，这需要一点时间，请勿关闭页面...");
+
+            const zip = new JSZip();
+            const folder = zip.folder("SequenceFrames");
+            let framesExtracted = 0;
+            const isVideo = files[0].type.startsWith('video/');
+            const prefix = inputZipPrefix.value.trim() || 'frame';
+
+            if (isVideo) {
+                const video = document.createElement('video'); video.src = URL.createObjectURL(files[0]);
+                video.muted = true; video.playsInline = true; await new Promise(r => video.onloadeddata = r);
+                
+                const sTime = parseFloat(inputTimeStart.value) || 0, eTime = parseFloat(inputTimeEnd.value) || video.duration;
+                const fps = parseInt(inputZipFps.value) || 30;
+                const interval = 1 / fps;
+                const totalFrames = Math.floor((eTime - sTime) * fps);
+                
+                for (let i = 0; i <= totalFrames; i++) {
+                    const t = sTime + i * interval; if (t > video.duration) break;
+                    exportStatus.textContent = `⏳ 正在处理高清视频帧 ${i + 1}/${totalFrames + 1} ...`;
+                    await seekVideoExact(video, Math.min(t, video.duration - 0.01));
+                    const hCanvas = generateHighResCanvas(video);
+                    const blob = await new Promise(res => hCanvas.toBlob(res, 'image/png'));
+                    folder.file(`${prefix}_${String(i).padStart(4, '0')}.png`, blob);
+                    framesExtracted++;
+                }
+            } else {
+                files.sort((a, b) => {
+                    const m1 = a.name.match(/\d+/g), m2 = b.name.match(/\d+/g);
+                    return (m1 ? parseInt(m1[m1.length-1]) : 1e9) - (m2 ? parseInt(m2[m2.length-1]) : 1e9);
+                });
+                for (let i = 0; i < files.length; i++) {
+                    exportStatus.textContent = `⏳ 正在处理高清图片 ${i + 1}/${files.length} ...`;
+                    const img = new Image(); img.src = URL.createObjectURL(files[i]); await new Promise(r => img.onload = r);
+                    const hCanvas = generateHighResCanvas(img);
+                    const blob = await new Promise(res => hCanvas.toBlob(res, 'image/png'));
+                    folder.file(`${prefix}_${String(i).padStart(4, '0')}.png`, blob);
+                }
+                framesExtracted = files.length;
+            }
+
+            exportStatus.textContent = "⏳ 正在生成 ZIP 压缩文件，准备下载...";
+            const zipContent = await zip.generateAsync({ type: "blob" });
+            const link = document.createElement('a'); link.href = URL.createObjectURL(zipContent);
+            link.download = `VFX_Frames_${prefix}_${framesExtracted}F.zip`; link.click();
+            setProcessingState(false); alert(`✅ 成功导出 ZIP，共 ${framesExtracted} 张高清序列帧！`);
+        });
+
+        // ================= 导出 2：Flipbook 小尺寸图集 =================
+        btnExportAtlas.addEventListener('click', async () => {
+            const files = Array.from(inputFiles.files);
+            const cols = parseInt(inputCols.value), rows = parseInt(inputRows.value), cell = parseInt(inputAtlasWidth.value) / cols;
+            if (!cols || !rows || cols <= 0 || rows <= 0) return alert("行列数必须为正数");
+            const capacity = cols * rows; const isVideo = files.length === 1 && files[0].type.startsWith('video/');
+            if (!isVideo && files.length > capacity) return alert(`格子不够，需要更大容量的行列配置。`);
+            
+            stopVideoPreview(); setProcessingState(true, "⏳ 正在生成 Flipbook 图集...");
+            atlasCanvas.width = cols * cell; atlasCanvas.height = rows * cell;
+            ctx.clearRect(0, 0, atlasCanvas.width, atlasCanvas.height);
+
+            let framesExtracted = 0;
+            if (isVideo) {
+                const video = document.createElement('video'); video.src = URL.createObjectURL(files[0]);
+                video.muted = true; video.playsInline = true; await new Promise(r => video.onloadeddata = r);
+                
+                const sTime = parseFloat(inputTimeStart.value) || 0, eTime = parseFloat(inputTimeEnd.value) || video.duration;
+                const interval = (eTime - sTime) / Math.max(1, capacity - 1);
+                
+                for (let i = 0; i < capacity; i++) {
+                    exportStatus.textContent = `⏳ 正在拼接图集帧 ${i + 1}/${capacity} ...`;
+                    await seekVideoExact(video, Math.min(sTime + i * interval, video.duration - 0.01));
+                    const cellCanvas = generateAtlasCellCanvas(video, cell);
+                    ctx.drawImage(cellCanvas, (i % cols) * cell, Math.floor(i / cols) * cell);
+                }
+                framesExtracted = capacity;
+            } else {
+                for (let i = 0; i < files.length; i++) {
+                    exportStatus.textContent = `⏳ 正在拼接图片 ${i + 1}/${files.length} ...`;
+                    const img = new Image(); img.src = URL.createObjectURL(files[i]); await new Promise(r => img.onload = r);
+                    const cellCanvas = generateAtlasCellCanvas(img, cell);
+                    ctx.drawImage(cellCanvas, (i % cols) * cell, Math.floor(i / cols) * cell);
+                }
+                framesExtracted = files.length;
+            }
+
+            generatedMeta = { frameCount: framesExtracted, columns: cols, rows: rows, cellSize: cell, atlasSize: [atlasCanvas.width, atlasCanvas.height] };
+            resultSection.classList.remove('hidden'); resultSection.scrollIntoView({ behavior: 'smooth' });
+            setProcessingState(false);
+        });
+
+        document.getElementById('btn-download-img').addEventListener('click', () => {
+            const link = document.createElement('a'); link.download = 'flipbook_atlas.png'; link.href = atlasCanvas.toDataURL('image/png'); link.click();
+        });
+        document.getElementById('btn-download-meta').addEventListener('click', () => {
+            if (!generatedMeta) return;
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(generatedMeta, null, 2));
+            const link = document.createElement('a'); link.download = 'flipbook_meta.json'; link.href = dataStr; link.click();
+        });
+    </script>
+</body>
+</html>
