@@ -1,3 +1,4 @@
+<img width="2752" height="1536" alt="Gemini_Generated_Image_6jl8t26jl8t26jl8" src="https://github.com/user-attachments/assets/f8e39e17-fc72-42a1-995f-766969bf4580" />
 
 # 🎨 VFX_Sequence_Exporter
 
