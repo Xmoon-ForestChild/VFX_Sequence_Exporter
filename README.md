@@ -1,5 +1,5 @@
-# flipbook_maker
-# 🎨 VFX Flipbook Maker
+
+# 🎨 VFX_Sequence_Exporter
 
 一个专为游戏特效美术（VFX Artist）设计的纯前端本地工具。无需安装，双击即可将**视频**或**序列帧**快速转换为去黑底的**透明图集 (Flipbook)** 或 **高清独立序列帧包 (ZIP)**。
 
