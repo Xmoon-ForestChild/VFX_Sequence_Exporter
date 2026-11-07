@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flipbook 图集生成器 (支持自由矩形裁切与缩放)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .checkerboard {
+            background-image: 
+                linear-gradient(45deg, #ccc 25%, transparent 25%), 
+                linear-gradient(-45deg, #ccc 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #ccc 75%), 
+                linear-gradient(-45deg, transparent 75%, #ccc 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px; width: 16px; border-radius: 50%;
+            background: #4f46e5; cursor: pointer; margin-top: -6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer;
+            background: #cbd5e1; border-radius: 2px;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-8 font-sans text-gray-800">
+    <div class="max-w-4xl mx-auto bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+        <h1 class="text-2xl font-bold mb-6 text-gray-900">Unity Flipbook 图集生成器</h1>
+        
+        <!-- 基础配置表单 -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">列数 (Columns) *</label>
+                <input type="number" id="input-cols" min="1" value="8" class="w-full border-gray-300 border rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">行数 (Rows) *</label>
+                <input type="number" id="input-rows" min="1" value="8" class="w-full border-gray-300 border rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">图集总宽度 (像素)</label>
+                <input type="number" id="input-atlas-width" value="2048" min="256" step="256" class="w-full border-gray-300 border rounded-md shadow-sm p-2 focus:ring-blue-500 focus:border-blue-500">
+                <p id="cell-size-display" class="text-xs text-blue-600 mt-1 font-semibold">自动计算每格尺寸: 256 px</p>
+            </div>
+        </div>
+
+        <div class="mb-6">
+            <label class="block text-sm font-medium text-gray-700 mb-1">选择文件 (支持多张序列帧 或 单个视频)</label>
+            <input type="file" id="input-files" multiple accept="image/png, image/jpeg, video/mp4, video/webm, video/quicktime" class="block w-full text-sm text-gray-500
+              file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold
+              file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 border border-gray-300 rounded-md p-2">
+            <p id="file-info" class="text-sm text-gray-500 mt-2">已选择 0 个文件</p>
+        </div>
+
+        <!-- 裁切与高级处理 -->
+        <div id="advanced-section" class="hidden mb-6 p-5 bg-indigo-50 rounded-md border border-indigo-100">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-md font-bold text-indigo-800">可视化裁切 & 高级处理</h3>
+                <div class="flex items-center bg-white p-2 border border-indigo-200 rounded shadow-sm">
+                    <input type="checkbox" id="input-remove-black" checked class="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded">
+                    <label for="input-remove-black" class="ml-2 block text-sm font-bold text-gray-800">
+                        抠除黑底 (生成发光半透明通道)
+                    </label>
+                </div>
+            </div>
+            
+            <p class="text-xs text-gray-600 mb-3 bg-white p-2 rounded border border-indigo-100">
+                <b>操作提示：</b> 拖动边缘手柄可缩放尺寸；框内拖拽可移动位置；框外拖拽可重新绘制。<br>
+                <span class="text-blue-600 font-semibold">生成图集时，矩形会自动等比缩放并居中到正方形格子内，不会变形。</span><br>
+                <span id="brush-hint" class="text-pink-600 hidden font-bold">当前处于“画笔模式”，框内拖拽为涂抹遮罩。</span>
+            </p>
+
+            <!-- 裁切比例控制 -->
+            <div class="flex items-center gap-6 mb-3">
+                <div class="flex items-center gap-3 bg-white px-3 py-1.5 rounded border border-gray-300 shadow-sm">
+                    <span class="text-sm font-bold text-gray-800">裁切形状:</span>
+                    <label class="flex items-center text-sm cursor-pointer text-gray-700">
+                        <input type="radio" name="crop-ratio" value="square" checked class="mr-1 text-indigo-600 focus:ring-indigo-500"> 1:1 正方形
+                    </label>
+                    <label class="flex items-center text-sm cursor-pointer text-gray-700">
+                        <input type="radio" name="crop-ratio" value="free" class="mr-1 text-indigo-600 focus:ring-indigo-500"> 自由矩形
+                    </label>
+                </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="input-show-mask-overlay" checked class="h-4 w-4 text-red-600 focus:ring-red-500 border-gray-300 rounded">
+                    <label for="input-show-mask-overlay" class="ml-2 block text-xs font-bold text-red-600">
+                        显示遮罩红色叠加层 (辅助预览)
+                    </label>
+                </div>
+            </div>
+
+            <div class="relative w-full max-w-lg mx-auto bg-black border border-gray-400 rounded overflow-hidden shadow-inner">
+                <canvas id="crop-canvas" class="w-full h-auto block cursor-crosshair"></canvas>
+            </div>
+
+            <!-- 边缘遮罩控制区 -->
+            <div class="mt-4 pt-4 border-t border-indigo-200">
+                <h4 class="text-sm font-bold text-gray-800 mb-3">🎨 边缘透明遮罩 (去除特效硬边)</h4>
+                
+                <div class="flex flex-wrap items-center gap-4 mb-3">
+                    <div>
+                        <label class="text-xs text-gray-600 block mb-1">遮罩类型</label>
+                        <select id="mask-type" class="border-gray-300 rounded text-sm p-1 shadow-sm focus:ring-indigo-500">
+                            <option value="none">无遮罩</option>
+                            <option value="circle" selected>圆形/椭圆遮罩 (消除四周边缘)</option>
+                            <option value="square">方形/矩形遮罩 (保留角落)</option>
+                            <option value="custom">🖼️ 上传自定义遮罩图...</option>
+                            <option value="brush">🖌️ 手动涂抹 (画笔/橡皮擦)</option>
+                        </select>
+                        <input type="file" id="input-custom-mask" accept="image/png, image/jpeg" class="hidden">
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-600 block mb-1">边缘羽化 (模糊度)</label>
+                        <input type="range" id="mask-feather" min="0" max="100" value="25" class="w-32 mt-1">
+                    </div>
+                </div>
+
+                <!-- 手动涂抹参数面板 -->
+                <div id="brush-controls" class="hidden bg-white p-3 rounded border border-indigo-100 flex flex-wrap items-center gap-4">
+                    <div class="flex items-center gap-3 border-r pr-4">
+                        <label class="text-sm text-gray-700 cursor-pointer flex items-center">
+                            <input type="radio" name="brush-mode" value="erase" checked class="mr-1"> 橡皮擦
+                        </label>
+                        <label class="text-sm text-gray-700 cursor-pointer flex items-center">
+                            <input type="radio" name="brush-mode" value="draw" class="mr-1"> 画笔
+                        </label>
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-600 block mb-1">笔刷大小</label>
+                        <input type="range" id="brush-size" min="5" max="150" value="40" class="w-24">
+                    </div>
+                    <button id="btn-fill-mask" class="ml-auto text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-3 py-1 rounded shadow-sm border border-indigo-200">
+                        重置全显
+                    </button>
+                    <button id="btn-clear-mask" class="text-xs bg-red-100 hover:bg-red-200 text-red-800 px-3 py-1 rounded shadow-sm border border-red-200">
+                        清空遮罩
+                    </button>
+                </div>
+            </div>
+
+            <!-- 视频专属：实时预览与时间裁切 -->
+            <div id="video-preview-controls" class="hidden flex flex-col items-center mt-4 pt-4 border-t border-indigo-200">
+                <div class="flex items-center gap-4 w-full max-w-lg mb-2">
+                    <button id="btn-play-pause" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1 px-4 rounded shadow">
+                        ▶ 播放预览
+                    </button>
+                    <span id="video-time-display" class="text-sm font-mono text-indigo-800 font-bold">0.00s / 0.00s</span>
+                </div>
+                <div class="flex items-center w-full max-w-lg mb-4 gap-3">
+                    <span class="text-xs text-gray-500 font-bold">进度</span>
+                    <input type="range" id="video-timeline" min="0" max="100" value="0" step="0.01" class="flex-grow appearance-none focus:outline-none">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                    <div>
+                        <label class="block text-xs text-gray-700 mb-1">视频时间裁切 - 开始 (秒)</label>
+                        <input type="number" id="input-time-start" value="0" step="0.1" min="0" class="w-full text-sm border-gray-300 rounded p-1 focus:ring-indigo-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-700 mb-1">视频时间裁切 - 结束 (秒)</label>
+                        <input type="number" id="input-time-end" value="0" step="0.1" min="0" class="w-full text-sm border-gray-300 rounded p-1 focus:ring-indigo-500">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center mb-6">
+            <input type="checkbox" id="input-preview" class="h-4 w-4 text-gray-600 focus:ring-gray-500 border-gray-300 rounded">
+            <label for="input-preview" class="ml-2 block text-sm text-gray-700">深色预览底色 (若勾选，导出的图集将带有纯黑底而非透明)</label>
+        </div>
+
+        <button id="btn-generate" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-md transition duration-150 shadow">
+            生成图集
+        </button>
+
+        <!-- 结果展示区 -->
+        <div id="result-section" class="mt-8 hidden border-t pt-8">
+            <h2 class="text-xl font-bold mb-4">生成结果</h2>
+            <div id="log-info" class="bg-gray-100 p-4 rounded-md text-sm text-gray-700 mb-4 whitespace-pre-wrap font-mono"></div>
+            
+            <div class="flex gap-4 mb-4">
+                <button id="btn-download-img" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded shadow-sm">
+                    ⬇️ 下载图集 (PNG)
+                </button>
+                <button id="btn-download-meta" class="bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded shadow-sm">
+                    ⬇️ 下载元数据 (JSON)
+                </button>
+            </div>
+
+            <div class="border rounded-md overflow-hidden bg-gray-200 p-4 checkerboard relative">
+                <canvas id="atlas-canvas" class="max-w-full h-auto shadow-md mx-auto"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const inputCols = document.getElementById('input-cols');
+        const inputRows = document.getElementById('input-rows');
+        const inputAtlasWidth = document.getElementById('input-atlas-width');
+        const cellSizeDisplay = document.getElementById('cell-size-display');
+        const inputFiles = document.getElementById('input-files');
+        const inputPreview = document.getElementById('input-preview');
+        const inputRemoveBlack = document.getElementById('input-remove-black');
+        const inputShowMaskOverlay = document.getElementById('input-show-mask-overlay');
+        const ratioRadios = document.querySelectorAll('input[name="crop-ratio"]');
+        
+        const advancedSection = document.getElementById('advanced-section');
+        const cropCanvas = document.getElementById('crop-canvas');
+        
+        // 遮罩相关 UI
+        const maskType = document.getElementById('mask-type');
+        const inputCustomMask = document.getElementById('input-custom-mask');
+        const maskFeather = document.getElementById('mask-feather');
+        const brushControls = document.getElementById('brush-controls');
+        const brushHint = document.getElementById('brush-hint');
+        const brushSize = document.getElementById('brush-size');
+        const btnFillMask = document.getElementById('btn-fill-mask');
+        const btnClearMask = document.getElementById('btn-clear-mask');
+        
+        // 视频相关 UI
+        const videoPreviewControls = document.getElementById('video-preview-controls');
+        const btnPlayPause = document.getElementById('btn-play-pause');
+        const videoTimeDisplay = document.getElementById('video-time-display');
+        const videoTimeline = document.getElementById('video-timeline');
+        const inputTimeStart = document.getElementById('input-time-start');
+        const inputTimeEnd = document.getElementById('input-time-end');
+        
+        const btnGenerate = document.getElementById('btn-generate');
+        const fileInfo = document.getElementById('file-info');
+        const resultSection = document.getElementById('result-section');
+        const atlasCanvas = document.getElementById('atlas-canvas');
+        const ctx = atlasCanvas.getContext('2d');
+        const logInfo = document.getElementById('log-info');
+        const btnDownloadImg = document.getElementById('btn-download-img');
+        const btnDownloadMeta = document.getElementById('btn-download-meta');
+
+        let generatedMeta = null;
+
+        // 离屏 Canvas
+        const maskCanvas = document.createElement('canvas');
+        const maskCtx = maskCanvas.getContext('2d');
+        const redOverlayCanvas = document.createElement('canvas');
+        const redOverlayCtx = redOverlayCanvas.getContext('2d');
+        let customMaskImage = null; 
+
+        function updateCellSizeDisplay() {
+            const cols = parseInt(inputCols.value) || 1;
+            const atlasW = parseInt(inputAtlasWidth.value) || 2048;
+            const cell = Math.floor(atlasW / cols);
+            cellSizeDisplay.textContent = `自动计算每格尺寸: ${cell} px`;
+            return cell;
+        }
+        inputCols.addEventListener('input', updateCellSizeDisplay);
+        inputAtlasWidth.addEventListener('input', updateCellSizeDisplay);
+
+        // --- 遮罩生成与控制 ---
+        function generateProceduralMask() {
+            if (!cropState.w || !cropState.h) return;
+            maskCanvas.width = cropState.w;
+            maskCanvas.height = cropState.h;
+            const type = maskType.value;
+            const feather = parseInt(maskFeather.value);
+
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            
+            if (type === 'none') {
+                maskCtx.fillStyle = 'white';
+                maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+            } else if (type === 'circle') {
+                maskCtx.filter = `blur(${feather}px)`;
+                maskCtx.fillStyle = 'white';
+                maskCtx.beginPath();
+                const radiusX = Math.max(1, maskCanvas.width / 2 - feather - 2);
+                const radiusY = Math.max(1, maskCanvas.height / 2 - feather - 2);
+                maskCtx.ellipse(maskCanvas.width/2, maskCanvas.height/2, radiusX, radiusY, 0, 0, Math.PI * 2);
+                maskCtx.fill();
+                maskCtx.filter = 'none';
+            } else if (type === 'square') {
+                maskCtx.filter = `blur(${feather}px)`;
+                maskCtx.fillStyle = 'white';
+                maskCtx.fillRect(feather + 2, feather + 2, maskCanvas.width - (feather+2)*2, maskCanvas.height - (feather+2)*2);
+                maskCtx.filter = 'none';
+            } else if (type === 'custom' && customMaskImage) {
+                maskCtx.filter = feather > 0 ? `blur(${feather}px)` : 'none';
+                maskCtx.drawImage(customMaskImage, 0, 0, maskCanvas.width, maskCanvas.height);
+                maskCtx.filter = 'none';
+            }
+        }
+
+        maskType.addEventListener('change', () => {
+            if (maskType.value === 'brush') {
+                brushControls.classList.remove('hidden');
+                brushHint.classList.remove('hidden');
+            } else {
+                brushControls.classList.add('hidden');
+                brushHint.classList.add('hidden');
+            }
+
+            if (maskType.value === 'custom') {
+                inputCustomMask.click();
+            } else {
+                generateProceduralMask();
+                if (!isVideoPlaying) renderCropCanvas();
+            }
+        });
+
+        inputCustomMask.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) {
+                maskType.value = 'circle';
+                generateProceduralMask();
+                if (!isVideoPlaying) renderCropCanvas();
+                return;
+            }
+            const img = new Image();
+            img.onload = () => {
+                const tempC = document.createElement('canvas');
+                tempC.width = img.width; tempC.height = img.height;
+                const tempCtx = tempC.getContext('2d');
+                tempCtx.drawImage(img, 0, 0);
+                
+                let imgData = tempCtx.getImageData(0, 0, img.width, img.height);
+                let data = imgData.data;
+                let hasAlpha = false;
+                for (let i = 3; i < data.length; i+=4) {
+                    if (data[i] < 255) { hasAlpha = true; break; }
+                }
+                if (!hasAlpha) {
+                    for (let i = 0; i < data.length; i+=4) {
+                        let luminance = (data[i] + data[i+1] + data[i+2]) / 3;
+                        data[i] = 255; data[i+1] = 255; data[i+2] = 255; 
+                        data[i+3] = luminance; 
+                    }
+                    tempCtx.putImageData(imgData, 0, 0);
+                }
+                customMaskImage = tempC;
+                generateProceduralMask();
+                if (!isVideoPlaying) renderCropCanvas();
+            };
+            img.src = URL.createObjectURL(file);
+        });
+
+        maskFeather.addEventListener('input', () => {
+            if (maskType.value !== 'brush') {
+                generateProceduralMask();
+                if (!isVideoPlaying) renderCropCanvas();
+            }
+        });
+        inputShowMaskOverlay.addEventListener('change', () => {
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+
+        btnFillMask.addEventListener('click', () => {
+            maskCtx.fillStyle = 'white';
+            maskCtx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+        btnClearMask.addEventListener('click', () => {
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+
+        function drawMaskStroke(x, y, lastPos) {
+            const mode = document.querySelector('input[name="brush-mode"]:checked').value;
+            const size = parseInt(brushSize.value);
+            const feather = parseInt(maskFeather.value);
+
+            maskCtx.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over';
+            maskCtx.filter = feather > 0 ? `blur(${feather}px)` : 'none';
+            maskCtx.fillStyle = 'white';
+            maskCtx.strokeStyle = 'white';
+            maskCtx.lineWidth = size;
+            maskCtx.lineCap = 'round';
+            maskCtx.lineJoin = 'round';
+
+            if (lastPos) {
+                maskCtx.beginPath();
+                maskCtx.moveTo(lastPos.x, lastPos.y);
+                maskCtx.lineTo(x, y);
+                maskCtx.stroke();
+            }
+            maskCtx.beginPath();
+            maskCtx.arc(x, y, size/2, 0, Math.PI * 2);
+            maskCtx.fill();
+            
+            maskCtx.filter = 'none';
+            maskCtx.globalCompositeOperation = 'source-over';
+        }
+
+
+        // --- 裁切与预览状态管理 ---
+        let cropState = { x: 0, y: 0, w: 100, h: 100, srcW: 100, srcH: 100 };
+        let previewSource = null;
+        let previewVideoElement = null;
+        let isVideoPlaying = false;
+        let isVideoInit = false; 
+        let isScrubbing = false;
+        let renderLoopId = null;
+
+        function getRatioMode() {
+            return document.querySelector('input[name="crop-ratio"]:checked').value;
+        }
+        
+        ratioRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (radio.value === 'square') {
+                    // 强制变回正方形
+                    const minSize = Math.min(cropState.w, cropState.h);
+                    cropState.w = minSize;
+                    cropState.h = minSize;
+                    generateProceduralMask();
+                    if (!isVideoPlaying) renderCropCanvas();
+                }
+            });
+        });
+
+        function initCrop(srcW, srcH, source) {
+            cropState.srcW = srcW;
+            cropState.srcH = srcH;
+            
+            const initSize = Math.min(srcW, srcH);
+            cropState.w = initSize;
+            cropState.h = initSize;
+            cropState.x = (srcW - cropState.w) / 2;
+            cropState.y = (srcH - cropState.h) / 2;
+            
+            generateProceduralMask(); 
+            previewSource = source;
+            cropCanvas.width = srcW;
+            cropCanvas.height = srcH;
+            renderCropCanvas();
+        }
+
+        // 绘制控制手柄
+        function drawHandle(ctx, x, y) {
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = '#2563eb';
+            ctx.lineWidth = 1.5;
+            ctx.fillRect(x - 4, y - 4, 8, 8);
+            ctx.strokeRect(x - 4, y - 4, 8, 8);
+        }
+
+        function renderCropCanvas() {
+            if (!previewSource) return;
+            const cropCtx = cropCanvas.getContext('2d');
+            
+            cropCtx.drawImage(previewSource, 0, 0, cropState.srcW, cropState.srcH);
+            cropCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            cropCtx.fillRect(0, 0, cropState.srcW, cropState.srcH);
+            
+            const tempC = document.createElement('canvas');
+            tempC.width = cropState.w; tempC.height = cropState.h;
+            const tCtx = tempC.getContext('2d');
+            tCtx.drawImage(previewSource, cropState.x, cropState.y, cropState.w, cropState.h, 0, 0, cropState.w, cropState.h);
+            
+            if (inputShowMaskOverlay.checked) {
+                cropCtx.drawImage(tempC, cropState.x, cropState.y);
+                
+                redOverlayCanvas.width = cropState.w; redOverlayCanvas.height = cropState.h;
+                redOverlayCtx.fillStyle = 'rgba(239, 68, 68, 0.4)';
+                redOverlayCtx.fillRect(0, 0, cropState.w, cropState.h);
+                redOverlayCtx.globalCompositeOperation = 'destination-out';
+                redOverlayCtx.drawImage(maskCanvas, 0, 0); 
+                redOverlayCtx.globalCompositeOperation = 'source-over';
+                
+                cropCtx.drawImage(redOverlayCanvas, cropState.x, cropState.y);
+            } else {
+                tCtx.globalCompositeOperation = 'destination-in';
+                tCtx.drawImage(maskCanvas, 0, 0);
+                cropCtx.drawImage(tempC, cropState.x, cropState.y);
+            }
+
+            // 裁切边框
+            cropCtx.strokeStyle = maskType.value === 'brush' ? '#ec4899' : '#3b82f6'; 
+            cropCtx.lineWidth = Math.max(1.5, cropState.srcW / 300);
+            cropCtx.strokeRect(cropState.x, cropState.y, cropState.w, cropState.h);
+            
+            // 三分辅助线
+            cropCtx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+            cropCtx.lineWidth = Math.max(1, cropState.srcW / 500);
+            cropCtx.beginPath();
+            let thirdW = cropState.w / 3;
+            let thirdH = cropState.h / 3;
+            cropCtx.moveTo(cropState.x + thirdW, cropState.y); cropCtx.lineTo(cropState.x + thirdW, cropState.y + cropState.h);
+            cropCtx.moveTo(cropState.x + thirdW * 2, cropState.y); cropCtx.lineTo(cropState.x + thirdW * 2, cropState.y + cropState.h);
+            cropCtx.moveTo(cropState.x, cropState.y + thirdH); cropCtx.lineTo(cropState.x + cropState.w, cropState.y + thirdH);
+            cropCtx.moveTo(cropState.x, cropState.y + thirdH * 2); cropCtx.lineTo(cropState.x + cropState.w, cropState.y + thirdH * 2);
+            cropCtx.stroke();
+
+            // 绘制 8 个控制手柄
+            drawHandle(cropCtx, cropState.x, cropState.y); // NW
+            drawHandle(cropCtx, cropState.x + cropState.w, cropState.y); // NE
+            drawHandle(cropCtx, cropState.x, cropState.y + cropState.h); // SW
+            drawHandle(cropCtx, cropState.x + cropState.w, cropState.y + cropState.h); // SE
+            
+            if (getRatioMode() === 'free') {
+                drawHandle(cropCtx, cropState.x + cropState.w/2, cropState.y); // N
+                drawHandle(cropCtx, cropState.x + cropState.w/2, cropState.y + cropState.h); // S
+                drawHandle(cropCtx, cropState.x, cropState.y + cropState.h/2); // W
+                drawHandle(cropCtx, cropState.x + cropState.w, cropState.y + cropState.h/2); // E
+            }
+        }
+
+        function renderLoop() {
+            if (isVideoPlaying && previewSource) {
+                renderCropCanvas();
+                renderLoopId = requestAnimationFrame(renderLoop);
+            }
+        }
+
+        function stopVideoPreview() {
+            if (previewVideoElement) previewVideoElement.pause();
+            isVideoPlaying = false;
+            btnPlayPause.textContent = "▶ 播放预览";
+            btnPlayPause.classList.replace('bg-indigo-500', 'bg-indigo-600');
+            if (renderLoopId) cancelAnimationFrame(renderLoopId);
+            renderCropCanvas(); 
+        }
+
+        btnPlayPause.addEventListener('click', () => {
+            if (!previewVideoElement) return;
+            if (previewVideoElement.paused) {
+                const startTime = parseFloat(inputTimeStart.value) || 0;
+                const endTime = parseFloat(inputTimeEnd.value) || previewVideoElement.duration;
+                if (previewVideoElement.currentTime < startTime || previewVideoElement.currentTime > endTime) {
+                    previewVideoElement.currentTime = startTime;
+                }
+                previewVideoElement.play();
+                isVideoPlaying = true;
+                btnPlayPause.textContent = "⏸ 暂停预览";
+                btnPlayPause.classList.replace('bg-indigo-600', 'bg-indigo-500');
+                renderLoop(); 
+            } else {
+                stopVideoPreview();
+            }
+        });
+
+        videoTimeline.addEventListener('mousedown', () => {
+            isScrubbing = true;
+            if (isVideoPlaying) stopVideoPreview(); 
+        });
+        videoTimeline.addEventListener('input', (e) => {
+            if (previewVideoElement) previewVideoElement.currentTime = parseFloat(e.target.value);
+        });
+        videoTimeline.addEventListener('mouseup', () => { isScrubbing = false; });
+        videoTimeline.addEventListener('mouseleave', () => { isScrubbing = false; });
+
+        // --- 交互区域检测 ---
+        const HANDLE_HIT = 12;
+        function getHitZone(x, y) {
+            const {x: cx, y: cy, w: cw, h: ch} = cropState;
+            const mode = getRatioMode();
+            
+            // 角落优先
+            if (Math.abs(x - cx) < HANDLE_HIT && Math.abs(y - cy) < HANDLE_HIT) return 'nw-resize';
+            if (Math.abs(x - (cx + cw)) < HANDLE_HIT && Math.abs(y - cy) < HANDLE_HIT) return 'ne-resize';
+            if (Math.abs(x - cx) < HANDLE_HIT && Math.abs(y - (cy + ch)) < HANDLE_HIT) return 'sw-resize';
+            if (Math.abs(x - (cx + cw)) < HANDLE_HIT && Math.abs(y - (cy + ch)) < HANDLE_HIT) return 'se-resize';
+            
+            // 边缘 (仅自由模式可用)
+            if (mode === 'free') {
+                if (Math.abs(y - cy) < HANDLE_HIT && x > cx && x < cx + cw) return 'n-resize';
+                if (Math.abs(y - (cy + ch)) < HANDLE_HIT && x > cx && x < cx + cw) return 's-resize';
+                if (Math.abs(x - cx) < HANDLE_HIT && y > cy && y < cy + ch) return 'w-resize';
+                if (Math.abs(x - (cx + cw)) < HANDLE_HIT && y > cy && y < cy + ch) return 'e-resize';
+            }
+            
+            // 内部移动
+            if (x > cx && x < cx + cw && y > cy && y < cy + ch) return 'move';
+            
+            return 'draw_box'; // 外部重绘
+        }
+
+        // --- 拖拽框选、移动、与涂抹逻辑 ---
+        let isDragging = false;
+        let dragMode = null; 
+        let dragStartMouse = { x: 0, y: 0 };
+        let dragStartCrop = {};
+        let lastDrawPos = null;
+
+        cropCanvas.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            const rect = cropCanvas.getBoundingClientRect();
+            const scaleX = cropCanvas.width / rect.width;
+            const scaleY = cropCanvas.height / rect.height;
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const mouseY = (e.clientY - rect.top) * scaleY;
+            
+            const hitZone = getHitZone(mouseX, mouseY);
+            
+            if (maskType.value === 'brush' && hitZone !== 'draw_box' && hitZone !== 'move' && !hitZone.includes('resize')) {
+                // 如果是内部且是笔刷
+                dragMode = 'draw_mask';
+                lastDrawPos = { x: mouseX - cropState.x, y: mouseY - cropState.y };
+                drawMaskStroke(lastDrawPos.x, lastDrawPos.y, null);
+                if (!isVideoPlaying) renderCropCanvas();
+                return;
+            }
+
+            if (maskType.value === 'brush' && hitZone === 'move') {
+                dragMode = 'draw_mask';
+                lastDrawPos = { x: mouseX - cropState.x, y: mouseY - cropState.y };
+                drawMaskStroke(lastDrawPos.x, lastDrawPos.y, null);
+                if (!isVideoPlaying) renderCropCanvas();
+                return;
+            }
+
+            dragMode = hitZone;
+            dragStartMouse = { x: mouseX, y: mouseY };
+            dragStartCrop = { ...cropState };
+        });
+
+        cropCanvas.addEventListener('mousemove', (e) => {
+            const rect = cropCanvas.getBoundingClientRect();
+            const scaleX = cropCanvas.width / rect.width;
+            const scaleY = cropCanvas.height / rect.height;
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const mouseY = (e.clientY - rect.top) * scaleY;
+
+            if (!isDragging) {
+                const hitZone = getHitZone(mouseX, mouseY);
+                if (maskType.value === 'brush' && hitZone === 'move') {
+                    cropCanvas.style.cursor = 'crosshair';
+                } else if (hitZone === 'draw_box') {
+                    cropCanvas.style.cursor = 'crosshair';
+                } else {
+                    cropCanvas.style.cursor = hitZone;
+                }
+                return;
+            }
+
+            if (dragMode === 'draw_mask') {
+                const currentX = mouseX - cropState.x;
+                const currentY = mouseY - cropState.y;
+                drawMaskStroke(currentX, currentY, lastDrawPos);
+                lastDrawPos = { x: currentX, y: currentY };
+            } else if (dragMode === 'move') {
+                let dx = mouseX - dragStartMouse.x;
+                let dy = mouseY - dragStartMouse.y;
+                let newX = Math.max(0, Math.min(dragStartCrop.x + dx, cropState.srcW - cropState.w));
+                let newY = Math.max(0, Math.min(dragStartCrop.y + dy, cropState.srcH - cropState.h));
+                cropState.x = newX;
+                cropState.y = newY;
+            } else if (dragMode.includes('resize')) {
+                let dx = mouseX - dragStartMouse.x;
+                let dy = mouseY - dragStartMouse.y;
+                
+                let newX = dragStartCrop.x; let newY = dragStartCrop.y;
+                let newW = dragStartCrop.w; let newH = dragStartCrop.h;
+
+                if (dragMode.includes('e')) newW += dx;
+                if (dragMode.includes('w')) { newW -= dx; newX += dx; }
+                if (dragMode.includes('s')) newH += dy;
+                if (dragMode.includes('n')) { newH -= dy; newY += dy; }
+
+                if (getRatioMode() === 'square') {
+                    // 正方形缩放：取最大的变化量以保持 1:1
+                    let maxChange = Math.max(newW, newH);
+                    newW = maxChange; newH = maxChange;
+                    if (dragMode.includes('n')) newY = dragStartCrop.y + dragStartCrop.h - newH;
+                    if (dragMode.includes('w')) newX = dragStartCrop.x + dragStartCrop.w - newW;
+                }
+
+                // 边界限制
+                if (newW >= 20 && newH >= 20) {
+                    if (newX < 0) { newW += newX; newX = 0; }
+                    if (newY < 0) { newH += newY; newY = 0; }
+                    if (newX + newW > cropState.srcW) newW = cropState.srcW - newX;
+                    if (newY + newH > cropState.srcH) newH = cropState.srcH - newY;
+                    
+                    if (getRatioMode() === 'square') {
+                        let finalSize = Math.min(newW, newH);
+                        newW = finalSize; newH = finalSize;
+                    }
+
+                    cropState.x = newX; cropState.y = newY;
+                    cropState.w = newW; cropState.h = newH;
+                }
+                updateMaskCanvasSize();
+            } else if (dragMode === 'draw_box') {
+                let dx = mouseX - dragStartMouse.x;
+                let dy = mouseY - dragStartMouse.y;
+                let newW = Math.abs(dx);
+                let newH = Math.abs(dy);
+                
+                if (getRatioMode() === 'square') {
+                    let minSize = Math.min(newW, newH);
+                    newW = minSize; newH = minSize;
+                }
+
+                let dirX = dx < 0 ? -1 : 1;
+                let dirY = dy < 0 ? -1 : 1;
+
+                if (dirX > 0 && dragStartMouse.x + newW > cropState.srcW) newW = cropState.srcW - dragStartMouse.x;
+                if (dirX < 0 && dragStartMouse.x - newW < 0) newW = dragStartMouse.x;
+                if (dirY > 0 && dragStartMouse.y + newH > cropState.srcH) newH = cropState.srcH - dragStartMouse.y;
+                if (dirY < 0 && dragStartMouse.y - newH < 0) newH = dragStartMouse.y;
+
+                if (getRatioMode() === 'square') {
+                    let finalSize = Math.min(newW, newH);
+                    newW = finalSize; newH = finalSize;
+                }
+
+                cropState.w = Math.max(20, newW);
+                cropState.h = Math.max(20, newH);
+                cropState.x = dirX > 0 ? dragStartMouse.x : dragStartMouse.x - cropState.w;
+                cropState.y = dirY > 0 ? dragStartMouse.y : dragStartMouse.y - cropState.h;
+                updateMaskCanvasSize();
+            }
+            if (!isVideoPlaying) renderCropCanvas();
+        });
+
+        function updateMaskCanvasSize() {
+            const oldMask = document.createElement('canvas');
+            oldMask.width = maskCanvas.width; oldMask.height = maskCanvas.height;
+            oldMask.getContext('2d').drawImage(maskCanvas, 0, 0);
+            
+            maskCanvas.width = cropState.w; maskCanvas.height = cropState.h;
+            if (maskType.value === 'brush') {
+                // 画笔模式拉伸
+                maskCtx.drawImage(oldMask, 0, 0, maskCanvas.width, maskCanvas.height);
+            } else {
+                generateProceduralMask();
+            }
+        }
+
+        window.addEventListener('mouseup', () => { isDragging = false; dragMode = null; });
+        cropCanvas.addEventListener('mouseleave', () => { isDragging = false; dragMode = null; });
+
+        // --- 监听文件变化 ---
+        inputFiles.addEventListener('change', (e) => {
+            stopVideoPreview(); 
+            cropState = { x: 0, y: 0, w: 100, h: 100, srcW: 100, srcH: 100 }; 
+            isVideoInit = false;
+
+            const count = e.target.files.length;
+            if (count === 0) {
+                advancedSection.classList.add('hidden');
+                return;
+            }
+
+            const firstFile = e.target.files[0];
+            const isVideo = firstFile.type.startsWith('video/');
+            advancedSection.classList.remove('hidden');
+
+            if (isVideo) {
+                fileInfo.textContent = `已选择 1 个视频: ${firstFile.name}`;
+                videoPreviewControls.classList.remove('hidden');
+                
+                previewVideoElement = document.createElement('video');
+                previewVideoElement.src = URL.createObjectURL(firstFile);
+                previewVideoElement.muted = true;
+                previewVideoElement.playsInline = true;
+                
+                previewVideoElement.onloadedmetadata = () => {
+                    inputTimeEnd.value = previewVideoElement.duration.toFixed(2);
+                    videoTimeline.max = previewVideoElement.duration;
+                    previewVideoElement.currentTime = parseFloat(inputTimeStart.value) || 0.01; 
+                };
+
+                previewVideoElement.onseeked = () => {
+                    if (!isVideoInit) {
+                        initCrop(previewVideoElement.videoWidth, previewVideoElement.videoHeight, previewVideoElement);
+                        isVideoInit = true;
+                    } else if (!isVideoPlaying) {
+                        renderCropCanvas();
+                    }
+                    videoTimeDisplay.textContent = `${previewVideoElement.currentTime.toFixed(2)}s / ${previewVideoElement.duration.toFixed(2)}s`;
+                    if (!isScrubbing) videoTimeline.value = previewVideoElement.currentTime;
+                };
+
+                previewVideoElement.ontimeupdate = () => {
+                    if (isVideoPlaying) {
+                        const startTime = parseFloat(inputTimeStart.value) || 0;
+                        const endTime = parseFloat(inputTimeEnd.value) || previewVideoElement.duration;
+                        if (previewVideoElement.currentTime >= endTime) previewVideoElement.currentTime = startTime; 
+                        videoTimeDisplay.textContent = `${previewVideoElement.currentTime.toFixed(2)}s / ${previewVideoElement.duration.toFixed(2)}s`;
+                        if (!isScrubbing) videoTimeline.value = previewVideoElement.currentTime;
+                    }
+                };
+                inputTimeStart.addEventListener('change', () => {
+                    if (!isVideoPlaying && previewVideoElement) previewVideoElement.currentTime = parseFloat(inputTimeStart.value) || 0;
+                });
+                
+            } else {
+                fileInfo.textContent = `已选择 ${count} 张图片`;
+                videoPreviewControls.classList.add('hidden');
+                previewVideoElement = null;
+
+                const tempImg = new Image();
+                tempImg.onload = () => initCrop(tempImg.width, tempImg.height, tempImg);
+                tempImg.src = URL.createObjectURL(firstFile);
+            }
+            updateCellSizeDisplay();
+        });
+
+        function getFrameIndex(filename) {
+            const matches = filename.match(/\d+/g);
+            return matches ? parseInt(matches[matches.length - 1], 10) : 1e9;
+        }
+
+        function setupAtlasCanvas(cols, rows, cell, isPreview) {
+            atlasCanvas.width = cols * cell;
+            atlasCanvas.height = rows * cell;
+            if (isPreview) {
+                ctx.fillStyle = "#12141a";
+                ctx.fillRect(0, 0, atlasCanvas.width, atlasCanvas.height);
+            } else {
+                ctx.clearRect(0, 0, atlasCanvas.width, atlasCanvas.height);
+            }
+        }
+
+        // --- 最终图集帧写入处理 (自适应等比居中) ---
+        function drawFrameWithEffects(source, row, col, cell, removeBlack) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = cell;
+            tempCanvas.height = cell;
+            const tempCtx = tempCanvas.getContext('2d');
+
+            // 1. 提取裁切区域并应用遮罩
+            const cropC = document.createElement('canvas');
+            cropC.width = cropState.w; cropC.height = cropState.h;
+            const cropC_Ctx = cropC.getContext('2d');
+            cropC_Ctx.drawImage(source, cropState.x, cropState.y, cropState.w, cropState.h, 0, 0, cropState.w, cropState.h);
+            
+            cropC_Ctx.globalCompositeOperation = 'destination-in';
+            cropC_Ctx.drawImage(maskCanvas, 0, 0);
+            cropC_Ctx.globalCompositeOperation = 'source-over';
+
+            // 2. 自适应等比缩放计算 (让矩形放入正方形格子不变形)
+            const scale = Math.min(cell / cropState.w, cell / cropState.h);
+            const drawW = cropState.w * scale;
+            const drawH = cropState.h * scale;
+            const drawX = (cell - drawW) / 2;
+            const drawY = (cell - drawH) / 2;
+
+            // 3. 绘制到单个 Cell 画布
+            tempCtx.drawImage(cropC, 0, 0, cropState.w, cropState.h, drawX, drawY, drawW, drawH);
+
+            // 4. 抠除黑底
+            if (removeBlack) {
+                let imgData = tempCtx.getImageData(0, 0, cell, cell);
+                let data = imgData.data;
+                for (let j = 0; j < data.length; j += 4) {
+                    let r = data[j]; let g = data[j+1]; let b = data[j+2];
+                    let currentAlpha = data[j+3] / 255; 
+                    data[j+3] = Math.max(r, g, b) * currentAlpha; 
+                }
+                tempCtx.putImageData(imgData, 0, 0);
+            }
+            // 5. 写入主图集
+            ctx.drawImage(tempCanvas, col * cell, row * cell);
+        }
+
+        async function processVideo(file, cols, rows, cell, isPreview) {
+            return new Promise((resolve, reject) => {
+                const video = document.createElement('video');
+                video.src = URL.createObjectURL(file);
+                video.muted = true;
+                video.playsInline = true;
+
+                video.onloadeddata = async () => {
+                    const capacity = cols * rows;
+                    setupAtlasCanvas(cols, rows, cell, isPreview);
+                    
+                    const duration = video.duration;
+                    const startTime = parseFloat(inputTimeStart.value) || 0;
+                    let endTime = parseFloat(inputTimeEnd.value) || duration;
+                    if (endTime <= startTime) endTime = duration;
+
+                    const removeBlack = inputRemoveBlack.checked;
+                    const actualDuration = endTime - startTime;
+                    const interval = actualDuration / Math.max(1, capacity - 1);
+                    
+                    for (let i = 0; i < capacity; i++) {
+                        video.currentTime = Math.min(startTime + i * interval, duration - 0.01);
+                        await new Promise(r => video.onseeked = r);
+                        drawFrameWithEffects(video, Math.floor(i / cols), i % cols, cell, removeBlack);
+                    }
+                    resolve({ extractedFrames: capacity, emptyCells: 0 });
+                };
+                video.onerror = () => reject(new Error("视频读取失败"));
+            });
+        }
+
+        async function processImages(files, cols, rows, cell, isPreview) {
+            files.sort((a, b) => getFrameIndex(a.name) - getFrameIndex(b.name));
+            setupAtlasCanvas(cols, rows, cell, isPreview);
+
+            const removeBlack = inputRemoveBlack.checked;
+            const imageLoadPromises = files.map(file => {
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    img.onload = () => resolve(img);
+                    img.onerror = () => reject(new Error(`加载失败: ${file.name}`));
+                    img.src = URL.createObjectURL(file);
+                });
+            });
+
+            const loadedImages = await Promise.all(imageLoadPromises);
+            loadedImages.forEach((img, i) => {
+                drawFrameWithEffects(img, Math.floor(i / cols), i % cols, cell, removeBlack);
+            });
+            return { extractedFrames: files.length, emptyCells: (cols * rows) - files.length };
+        }
+
+        btnGenerate.addEventListener('click', async () => {
+            stopVideoPreview();
+
+            const files = Array.from(inputFiles.files);
+            const cols = parseInt(inputCols.value);
+            const rows = parseInt(inputRows.value);
+            const cell = updateCellSizeDisplay();
+            const isPreview = inputPreview.checked;
+
+            if (!cols || !rows || cols <= 0 || rows <= 0) { alert("列数和行数必须为正整数！"); return; }
+            if (files.length === 0) { alert("请先选择图片或视频文件！"); return; }
+
+            const capacity = cols * rows;
+            const isVideo = files.length === 1 && files[0].type.startsWith('video/');
+            if (!isVideo && files.length > capacity) {
+                alert(`格子不够！你选择了 ${files.length} 张图片，但只能放 ${capacity} 张。`); return;
+            }
+
+            btnGenerate.textContent = "生成中... (处理中请稍候)";
+            btnGenerate.disabled = true;
+
+            try {
+                let processResult = isVideo 
+                    ? await processVideo(files[0], cols, rows, cell, isPreview)
+                    : await processImages(files, cols, rows, cell, isPreview);
+
+                generatedMeta = {
+                    frameCount: processResult.extractedFrames,
+                    columns: cols, rows: rows, capacity: capacity,
+                    emptyCells: processResult.emptyCells, cellSize: cell,
+                    atlasSize: [atlasCanvas.width, atlasCanvas.height]
+                };
+
+                let logText = `网格配置: ${cols}列 x ${rows}行 (共${capacity}格)\n每格尺寸: ${cell}px (自动计算)\n处理帧数: ${processResult.extractedFrames} 帧\n图集尺寸: ${atlasCanvas.width}x${atlasCanvas.height} px`;
+                if (processResult.emptyCells > 0) logText += `\n(提示: 有 ${processResult.emptyCells} 个空网格)`;
+                
+                logInfo.textContent = logText;
+                resultSection.classList.remove('hidden');
+                resultSection.scrollIntoView({ behavior: 'smooth' });
+
+            } catch (error) {
+                alert("生成失败：" + error.message);
+            } finally {
+                btnGenerate.textContent = "生成图集";
+                btnGenerate.disabled = false;
+            }
+        });
+
+        btnDownloadImg.addEventListener('click', () => {
+            const link = document.createElement('a');
+            link.download = 'flipbook_atlas.png';
+            link.href = atlasCanvas.toDataURL('image/png');
+            link.click();
+        });
+
+        btnDownloadMeta.addEventListener('click', () => {
+            if (!generatedMeta) return;
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(generatedMeta, null, 2));
+            const link = document.createElement('a');
+            link.download = 'flipbook_meta.json';
+            link.href = dataStr;
+            link.click();
+        });
+        
+        updateCellSizeDisplay();
+    </script>
+</body>
+</html>
